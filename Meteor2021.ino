@@ -20,10 +20,9 @@
 
 // Ideas
 // 1) clutch shot
-// 3) make launch harder (remove dead bumper option & clear option)
-// 5) wow & special conditions
-// 6) Meteor cleared but not reset (bonsux=7?)
-
+// 2) special shot on rockets aligned
+// 3) spinner = 0 reward
+// 4) spinner reward stacked with orpheus
 
 #include "BSOS_Config.h"
 #include "BallySternOS.h"
@@ -83,11 +82,12 @@ boolean MachineStateChanged = true;
 #define GAME_MODE_METEOR_STORM_START            3
 #define GAME_MODE_METEOR_STORM                  4
 #define GAME_MODE_METEOR_STORM_FINISHED         5
-#define GAME_MODE_ORPHEUS_START                 6
-#define GAME_MODE_ORPHEUS                       7
-#define GAME_MODE_ORPHEUS_FRAGMENTED            8
-#define GAME_MODE_ORPHEUS_FINISH                9
-#define GAME_MODE_ORPHEUS_FAIL                  10
+#define GAME_MODE_WIZARD                        6
+#define GAME_MODE_ORPHEUS_START                 7
+#define GAME_MODE_ORPHEUS                       8
+#define GAME_MODE_ORPHEUS_FRAGMENTED            9
+#define GAME_MODE_ORPHEUS_FINISH                10
+#define GAME_MODE_ORPHEUS_FAIL                  11
 
 #define EEPROM_BALL_SAVE_BYTE           100
 #define EEPROM_FREE_PLAY_BYTE           101
@@ -141,9 +141,11 @@ boolean MachineStateChanged = true;
 #define SOUND_EFFECT_5X_BONUS_COUNT           36
 #define SOUND_EFFECT_6X_BONUS_COUNT           37
 #define SOUND_EFFECT_7X_BONUS_COUNT           38
+#define SOUND_EFFECT_SUPER_SPINNER            39
 #define SOUND_EFFECT_EXTRA_BALL               40
 #define SOUND_EFFECT_TILT_WARNING             41
 #define SOUND_EFFECT_MATCH_SPIN               42
+#define SOUND_EFFECT_SUPER_JACKPOT            43
 #define SOUND_EFFECT_1_TARGET_HIT             44
 #define SOUND_EFFECT_2_TARGET_HIT             45
 #define SOUND_EFFECT_3_TARGET_HIT             46
@@ -192,7 +194,7 @@ boolean MachineStateChanged = true;
 #define SOUND_EFFECT_BACKGROUND_4             93
 #define SOUND_EFFECT_BACKGROUND_5             94
 #define SOUND_EFFECT_BACKGROUND_6             95
-#define SOUND_EFFECT_BACKGROUND_WIZ           96
+#define SOUND_EFFECT_WIZARD_MODE              96
 #define SOUND_EFFECT_BACKGROUND_ORPHEUS       97
 #define SOUND_EFFECT_ORPHEUS_FINISH           98
 
@@ -219,6 +221,8 @@ boolean MachineStateChanged = true;
 #define ORPHEUS_FINISH_DURATION_LONG    20000  
 #define METEOR_HIT_SHORT_DISPLAY        3000
 #define METEOR_HIT_LONG_DISPLAY         6000
+#define SUPER_SPINNER_DURATION          40000
+#define WIZARD_MODE_DURATION            60000
 
 #define SPOT_METEOR_TARGET_LIGHT_1            0x01
 #define SPOT_METEOR_TARGET_LIGHT_2            0x02
@@ -231,6 +235,16 @@ boolean MachineStateChanged = true;
 #define METEOR_STORM_SECTOR_2           0x02
 #define METEOR_STORM_SECTOR_3           0x04
 
+#define GOAL_ORPHEUS_COMPLETED          0x01
+#define GOAL_ORPHEUS_FRAGMENT_COMPLETED 0x02
+#define GOAL_BONUS_MAXED_OUT            0x04
+#define GOAL_SUPER_SPINNER_ACHIEVED     0x08
+#define GOAL_WIZARD_MODE_COLLECTED      0x10
+
+#define AWARD_SCORING_ORPHEUS           1
+#define AWARD_SCORING_WIZARD            2
+#define JACKPOT_VALUE                   100000
+#define SUPER_JACKPOT_VALUE             200000
 
 // These defines dictate the ways rockets can be launched
 #define LAUNCH_ALL_ROCKETS_WITH_STANDUP_UNTIL_LEVEL   1
@@ -258,7 +272,6 @@ byte DimLevel = 2;
 byte ScoreAwardReplay = 0;
 boolean HighScoreReplay = true;
 boolean MatchFeature = true;
-byte SpecialLightAward = 0;
 boolean TournamentScoring = false;
 boolean ResetScoresToClearVersion = false;
 boolean ScrollingScores = true;
@@ -318,10 +331,11 @@ byte RocketsArmed = 0;
 byte NumberOfMeteorsHit[4];
 byte OrpheusPhase;
 byte OrpheusRound[4];
-byte OrpheusScoring = false;
-byte TargetWowPhase = 0;
+byte AwardScoring = 0;
+byte TargetAwardPhase = 0;
+byte TargetAward = 0;
 byte NumberOfSpins[4];
-byte OrpheusCompletedFlag;
+byte GoalsCompletedFlags[4];
 
 boolean SkillShotHit;
 boolean JackpotLit = false;
@@ -343,6 +357,7 @@ unsigned long LastMeteorCheckTime = 0;
 unsigned long MeteorHitStartTime = 0;
 unsigned long MeteorHitEndTime = 0;
 unsigned long LastOrpheusHitTime = 0;
+unsigned long SuperSpinnerEndTime = 0;
 
 
 
@@ -494,12 +509,27 @@ byte CheckSequentialSwitches(byte startingSwitch, byte numSwitches) {
 ////////////////////////////////////////////////////////////////////////////
 
 byte BonusStartingLamps[3] = {LEFT_ROCKET_1K, MIDDLE_ROCKET_1K, RIGHT_ROCKET_1K};
+unsigned long ZeroArray[3] = {0, 0, 0};
+byte SevenArray[3] = {7, 7, 7};
 
-void ShowBonus(byte *bonusArray, unsigned long *bonusOverride) {
+void ShowBonus() {
+
+  if (memcmp(BonusAnimationStart, ZeroArray, 12)==0 && memcmp(Bonus, SevenArray, 3)==0) {
+//  if (  !BonusAnimationStart[0] && !BonusAnimationStart[1] && !BonusAnimationStart[2] &&
+//        Bonus[0]==7 && Bonus[1]==7 && Bonus[2]==7 ) {
+    byte fullAnimationPhase = (CurrentTime/100)%4;
+    for (byte count=0; count<7; count++) {
+      for (byte i=0; i<3; i++) {
+        BSOS_SetLampState(BonusStartingLamps[i]-count, ((count-(i%2))%4)==fullAnimationPhase);
+      }
+    }
+    GoalsCompletedFlags[CurrentPlayer] |= GOAL_BONUS_MAXED_OUT;
+  } else {
     
-  for (byte count=0; count<7; count++) {
-    for (int i=0; i<3; i++) {
-      if (bonusOverride[i]==0) BSOS_SetLampState(BonusStartingLamps[i]-count, (count+1)==bonusArray[i]);
+    for (byte count=0; count<7; count++) {
+      for (byte i=0; i<3; i++) {
+        if (BonusAnimationStart[i]==0) BSOS_SetLampState(BonusStartingLamps[i]-count, (count+1)==Bonus[i]);
+      }
     }
   }
   
@@ -528,7 +558,7 @@ void ShowMeteorLamps() {
     }
   } else if (GameMode==GAME_MODE_ORPHEUS) {
     byte wowPhase = 5;
-    byte numBits = 6-CountBits(CurrentMeteorTargetsValid);
+    byte numBits = 6-CountBits(CurrentMeteorTargetsValid&0x3F);
     byte bitPos;
     byte posBasedOnTime = ((CurrentTime/1500)%numBits)+1;
     for (bitPos = 0; bitPos<6 && posBasedOnTime; bitPos++) {
@@ -641,7 +671,7 @@ void ShowLampAnimation(byte animationNum, unsigned long divisor, unsigned long b
 }
 
 
-byte MeteorGoals[7] = {6, 13, 21, 30, 40, 55, 72};
+byte MeteorGoals[7] = {3, 7, 13, 21, 30, 41, 55};
 
 byte GetNextMeteorGoal() {
   if (OrpheusRound[CurrentPlayer]<7) return MeteorGoals[OrpheusRound[CurrentPlayer]];
@@ -650,7 +680,6 @@ byte GetNextMeteorGoal() {
 
 
 void ShowBonusLamps(boolean actuallyShowLamps = true) {
-
 
   if (CollectRocketAnimationStart!=0) {
     byte totalBonus = Bonus[0]+Bonus[1]+Bonus[2];
@@ -673,7 +702,7 @@ void ShowBonusLamps(boolean actuallyShowLamps = true) {
       CollectRocketAnimationStart = 0;
     }
   } else if (GameMode==GAME_MODE_UNSTRUCTURED_PLAY) {
-    ShowBonus(Bonus, BonusAnimationStart);
+    ShowBonus();
 
     for (int i=0; i<3; i++) {
       if (BonusAnimationStart[i]) {
@@ -769,7 +798,7 @@ void ShowRocketDropLamps() {
     }
   } else {
     for (int count=0; count<6; count++) {
-      if (TargetWowPhase) BSOS_SetLampState(RocketDropLamps[count], count==((TargetWowPhase-1)*2), 0, 500);
+      if (TargetAward) BSOS_SetLampState(RocketDropLamps[count], count==((TargetAwardPhase)*2 + (TargetAward-1)), 0, 500);
       else BSOS_SetLampState(RocketDropLamps[count], 0);
     }
   }
@@ -799,7 +828,12 @@ void ShowBonusXLamps() {
 
 void ShowSpinnerLamps() {
   byte currentSwitches = CheckSequentialSwitches(SW_DROP_TARGET_R, 6);
-  if (GameMode==GAME_MODE_SKILL_SHOT) {
+
+  if (SuperSpinnerEndTime) {
+    for (int count=0; count<6; count++) {
+      BSOS_SetLampState(SPINNER_1-count, 1, 0, 100);    
+    }
+  } else if (GameMode==GAME_MODE_SKILL_SHOT) {
   } else {
     if (LastTimeSpinnerHit!=0 && (CurrentTime-LastTimeSpinnerHit)<SPINNER_ANIMATION_DURATION) {
       for (int count=0; count<6; count++) {
@@ -810,6 +844,7 @@ void ShowSpinnerLamps() {
       for (int count=0; count<6; count++) {
         BSOS_SetLampState(SPINNER_6+count, currentSwitches & (1<<count));
       }
+      if (LastTimeSpinnerHit) BSOS_SetDisplayCredits(Credits);
       LastTimeSpinnerHit = 0;
       SpinnerHitPhase = 11;
     }
@@ -1426,7 +1461,7 @@ inline void StopSoundEffect(byte soundEffectNum) {
 
 unsigned long AttractLastLadderTime = 0;
 byte AttractLastLadderBonus = 0;
-unsigned long AttractLastStarTime = 0;
+unsigned long AttractDisplayRampStart = 0;
 byte AttractLastHeadMode = 255;
 byte AttractLastPlayfieldMode = 255;
 byte InAttractMode = false;
@@ -1509,7 +1544,7 @@ int RunAttractMode(int curState, boolean curStateChanged) {
       Bonus[0] = AttractLastLadderBonus;
       Bonus[1] = 7-AttractLastLadderBonus;
       Bonus[2] = AttractLastLadderBonus;
-      ShowBonus(Bonus, BonusAnimationStart);
+      ShowBonus();
       AttractLastLadderBonus += 1;
       if (AttractLastLadderBonus>7) AttractLastLadderBonus = 0;
       AttractLastLadderTime = CurrentTime;      
@@ -1651,11 +1686,15 @@ void HandleMeteorDropTargetHit(byte switchHit) {
 
     byte currentSwitches = CheckSequentialSwitches(SW_DROP_TARGET_R, 6);
     
-    if (GameMode!=GAME_MODE_ORPHEUS && GameMode!=GAME_MODE_ORPHEUS_FRAGMENTED) {
+    if (GameMode!=GAME_MODE_ORPHEUS && GameMode!=GAME_MODE_ORPHEUS_FRAGMENTED && GameMode!=GAME_MODE_ORPHEUS_START) {
       if (currentSwitches==0x3F) {
         BSOS_PushToTimedSolenoidStack(SOL_RESET_METEOR_BANK, 15, CurrentTime+500);
+        if (AwardScoring==AWARD_SCORING_WIZARD) {
+          PlaySoundEffect(SOUND_EFFECT_SUPER_JACKPOT);
+          CurrentScoreOfCurrentPlayer += SUPER_JACKPOT_VALUE;
+        }
         SetBonusX(CurrentBonusX+1);
-          if (GameMode!=GAME_MODE_METEOR_STORM_START && GameMode!=GAME_MODE_METEOR_STORM) {
+          if (GameMode!=GAME_MODE_METEOR_STORM_START && GameMode!=GAME_MODE_METEOR_STORM && GameMode!=GAME_MODE_WIZARD) {
             GameMode = GAME_MODE_METEOR_STORM_START;
             GameModeStartTime = 0;
           }
@@ -1671,7 +1710,8 @@ void HandleMeteorDropTargetHit(byte switchHit) {
         CurrentScoreOfCurrentPlayer += 50000;
         PlaySoundEffect(SOUND_EFFECT_ORPHEUS_HIT_1 + CurrentTime%2);
         if (currentSwitches==0x3F) {
-          if (GameMode==GAME_MODE_ORPHEUS) OrpheusCompletedFlag |= (1<<CurrentPlayer);
+          CurrentMeteorTargetsValid = 0x3F;
+          GoalsCompletedFlags[CurrentPlayer] |= GOAL_ORPHEUS_COMPLETED;
           GameMode = GAME_MODE_ORPHEUS_FINISH;
           GameModeStartTime = 0; 
           GameModeEndTime = CurrentTime + ORPHEUS_FINISH_DURATION_LONG;
@@ -1688,7 +1728,9 @@ void HandleMeteorDropTargetHit(byte switchHit) {
           
         }
         if (currentSwitches==0x3F) {
+          CurrentMeteorTargetsValid = 0x3F;
           GameModeStartTime = 0;
+          GoalsCompletedFlags[CurrentPlayer] |= GOAL_ORPHEUS_FRAGMENT_COMPLETED;
           GameMode = GAME_MODE_ORPHEUS_FINISH;
           GameModeEndTime = CurrentTime + ORPHEUS_FINISH_DURATION_SHORT;
         }
@@ -1708,9 +1750,13 @@ void Handle3BankHit(byte switchNum, byte bankNum) {
   // Only score if this switch hasn't been hit yet
   byte switchMask = (1<<(switchNum-StartingBankSwitch[bankNum]));
   if (!(Current3BankTargetsHit[bankNum]&switchMask)) {
-    if (TargetWowPhase==(bankNum+1) && switchMask==0x04) {
-      AwardExtraBall();
-      TargetWowPhase = 0;
+    if (TargetAward && TargetAwardPhase==(bankNum) && switchMask==0x04) {
+      if (TargetAward==1) {
+        AwardExtraBall();
+      } else if (TargetAward==2) {
+        AwardSpecial();
+      }
+      TargetAward = 0;
     }
     if (GameMode==GAME_MODE_METEOR_STORM) {
       if (!(RocketsArmed&(1<<(bankNum)))) PlaySoundEffect(SOUND_EFFECT_ROCKET_1_ARMED + (bankNum));
@@ -1718,10 +1764,12 @@ void Handle3BankHit(byte switchNum, byte bankNum) {
     RocketsArmed |= 1<<(bankNum);
     
     Current3BankTargetsHit[bankNum] |= switchMask;
-    Bonus[bankNum] += 1;
+    AddToBonus(bankNum);
+/*    Bonus[bankNum] += 1;
     if (Bonus[bankNum]>MAX_DISPLAY_BONUS) Bonus[bankNum] = MAX_DISPLAY_BONUS;
     BonusAnimationStart[bankNum] = CurrentTime;
     BonusAnimationShown[bankNum] = 0;
+*/    
   }
 
   if (CheckSequentialSwitches(StartingBankSwitch[bankNum], 3)==0x07) {
@@ -1732,6 +1780,9 @@ void Handle3BankHit(byte switchNum, byte bankNum) {
       PlaySoundEffect(SOUND_EFFECT_ROCKET_LAUNCHED);
       RocketsArmed &= ~(1<<(bankNum));
       RocketsFiredFromBank = true;
+    } else if (AwardScoring==AWARD_SCORING_WIZARD) {
+      PlaySoundEffect(SOUND_EFFECT_JACKPOT);
+      CurrentScoreOfCurrentPlayer += JACKPOT_VALUE;
     }
   }
 
@@ -1750,27 +1801,22 @@ int InitGamePlay() {
   BSOS_EnableSolenoidStack();
   BSOS_SetCoinLockout((Credits >= MaximumCredits) ? true : false);
   BSOS_TurnOffAllLamps();
-
-  // Turn back on all lamps that are needed
+  StopAudio();
 
   // When we go back to attract mode, there will be no need to reset scores
   ResetScoresToClearVersion = false;
 
   // Reset displays & game state variables
   for (int count = 0; count < 4; count++) {
-//    BSOS_SetDisplay(count, 0);
-//    if (count == 0) BSOS_SetDisplayBlank(count, 0x30);
-//    else BSOS_SetDisplayBlank(count, 0x00);
-
     // Initialize game-specific variables
     BonusX[count] = 1; 
     MeteorStatus[count] = 0;
     NumberOfMeteorsHit[count] = 0;
     OrpheusRound[count] = 0;
     NumberOfSpins[count] = 0;    
+    GoalsCompletedFlags[count] = 0;
   }
   memset(CurrentScores, 0, 4*sizeof(unsigned long));
-  OrpheusCompletedFlag = 0;
   
   SamePlayerShootsAgain = false;
   CurrentBallInPlay = 1;
@@ -1793,7 +1839,7 @@ int InitNewBall(bool curStateChanged, byte playerNum, int ballNum) {
 
     BSOS_SetDisableFlippers(false);
     BSOS_EnableSolenoidStack();
-//    BSOS_SetDisplayCredits(Credits, true);
+    BSOS_SetDisplayCredits(Credits, true);
     if (CurrentNumPlayers>1 && (ballNum!=1 || playerNum!=0)) PlaySoundEffect(SOUND_EFFECT_PLAYER_1_UP+playerNum);
 
     BSOS_SetDisplayBallInPlay(ballNum);
@@ -1841,11 +1887,18 @@ int InitNewBall(bool curStateChanged, byte playerNum, int ballNum) {
     Rocket3BumperAnimationTime = 0;
     CollectRocketAnimationStart = 0;
     CollectRocketCurrentLevel = 0;
+    SuperSpinnerEndTime = 0;
     MeteorHitStarted = false;
     MeteorHitStartTime = 0;
     MeteorStormSectors = 0;
     OrpheusPhase = 0;
-    OrpheusScoring = false;
+    AwardScoring = 0;
+    TargetAward = 0;
+
+    if (GoalsCompletedFlags[CurrentPlayer]&GOAL_WIZARD_MODE_COLLECTED) {
+      GoalsCompletedFlags[CurrentPlayer] = 0;
+    }
+
 
     // Reset drop targets for skill shot
     SetMeteorDropTargets(0, 450);
@@ -1920,7 +1973,7 @@ int ManageGameMode() {
       if (GameModeStartTime==0) {
         GameModeStartTime = CurrentTime;
         GameModeEndTime = 0;
-        if (CurrentBallInPlay==1) {
+        if (CurrentBallInPlay==1 && CurrentScoreOfCurrentPlayer==0) {
           PlayBackgroundSong(SOUND_EFFECT_GAME_START_INTRO);
         } else {
           PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
@@ -1948,14 +2001,24 @@ int ManageGameMode() {
         ShowLampAnimation(2, 40, (CurrentTime-GameModeStartTime), 14, false, true);
       }
 
-      if ((CurrentTime-LastTimeSpinnerHit)>5000) {
-        BSOS_SetDisplayCredits(Credits);
+      if (CurrentTime>SuperSpinnerEndTime) {
+        SuperSpinnerEndTime = 0;
       }
 
-      if (ExtraBallCollected==false && Bonus[0]>0 && Bonus[0]<7 && Bonus[0]==Bonus[1] && Bonus[0]==Bonus[2]) {
-        if (TargetWowPhase==0) TargetWowPhase = 1;
+      if (Bonus[0]>0 && Bonus[0]==Bonus[1] && Bonus[0]==Bonus[2]) {
+        if (Bonus[0]<7) {
+          if (!ExtraBallCollected) TargetAward = 1;
+        } else {
+          if (!SpecialCollected) TargetAward = 2;
+        }
       } else {
-        TargetWowPhase = 0;        
+        TargetAward = 0;
+      }
+
+      if ((GoalsCompletedFlags[CurrentPlayer])==0x0F) {
+        GameMode = GAME_MODE_WIZARD;
+        GameModeStartTime = 0;
+        GameModeEndTime = CurrentTime + WIZARD_MODE_DURATION;
       }
 
       if (CurrentTime > StandupResetTime) {
@@ -1974,6 +2037,7 @@ int ManageGameMode() {
         MeteorStormSectors = 0;
         RocketsArmed = 0;     
       }
+      
       if (CurrentTime>GameModeEndTime) {
         GameMode = GAME_MODE_METEOR_STORM;
         GameModeStartTime = 0;
@@ -2111,10 +2175,10 @@ int ManageGameMode() {
       if (GameModeStartTime==0) {
         BSOS_TurnOffAllLamps();
         StopAudio();
-        PlaySoundEffect(SOUND_EFFECT_ORPHEUS_FINISH);
+        PlayBackgroundSong(SOUND_EFFECT_ORPHEUS_FINISH);
         SetMeteorDropTargets(0x3F, 0, false);
         GameModeStartTime = CurrentTime;
-        OrpheusScoring = true;
+        AwardScoring = AWARD_SCORING_ORPHEUS;
         // Game mode end time is controlled by caller
       }
       
@@ -2124,12 +2188,37 @@ int ManageGameMode() {
       if (CurrentTime>GameModeEndTime) {
         GameModeStartTime = 0;
         GameMode = GAME_MODE_UNSTRUCTURED_PLAY;
-//        StopSoundEffect(SOUND_EFFECT_ORPHEUS_FINISH);
-        StopAudio();
+//        StopAudio();
         SetMeteorDropTargets(0);
-        PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
+        //PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
+        //ResumeBackgroundSong();
         OrpheusRound[CurrentPlayer] += 1;
-        OrpheusScoring = false;
+        AwardScoring = 0;
+      }
+    break;
+
+    case GAME_MODE_WIZARD:
+      if (GameModeStartTime==0) {
+        BSOS_TurnOffAllLamps();
+        StopAudio();
+        PlayBackgroundSong(SOUND_EFFECT_WIZARD_MODE);
+        SetMeteorDropTargets(0x00, 0, false);
+        GameModeStartTime = CurrentTime;
+        AwardScoring = AWARD_SCORING_WIZARD;
+        GoalsCompletedFlags[CurrentPlayer] |= GOAL_WIZARD_MODE_COLLECTED;
+      }
+      
+      specialAnimationRunning = true;
+      ShowLampAnimation(1, 80, CurrentTime, 14, false, false);
+      
+      if (CurrentTime>GameModeEndTime) {
+        GameModeStartTime = 0;
+        GameMode = GAME_MODE_UNSTRUCTURED_PLAY;
+//        ResumeBackgroundSong();
+//        StopAudio();
+        SetMeteorDropTargets(0);
+//        PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
+        AwardScoring = 0;
       }
     break;
 
@@ -2208,10 +2297,9 @@ int CountdownBonus(boolean curStateChanged) {
 
   // If this is the first time through the countdown loop
   if (curStateChanged) {
-//    BSOS_SetLampState(BALL_IN_PLAY, 1, 0, 250);
 
     CountdownStartTime = CurrentTime;
-    ShowBonus(Bonus, BonusAnimationStart);
+    ShowBonus();
 
     LastCountdownReportTime = CountdownStartTime;
     BonusCountDownEndTime = 0xFFFFFFFF;
@@ -2234,7 +2322,7 @@ int CountdownBonus(boolean curStateChanged) {
         }
       }
       
-      ShowBonus(Bonus, BonusAnimationStart);
+      ShowBonus();
     } else if (BonusCountDownEndTime == 0xFFFFFFFF) {
       BonusCountDownEndTime = CurrentTime + 1000;
     }
@@ -2285,8 +2373,12 @@ void CheckHighScores() {
 }
 
 
-
-
+void AddToBonus(byte bonusNum) {
+  Bonus[bonusNum] += 1;
+  if (Bonus[bonusNum]>MAX_DISPLAY_BONUS) Bonus[bonusNum] = MAX_DISPLAY_BONUS;
+  BonusAnimationStart[bonusNum] = CurrentTime;
+  BonusAnimationShown[bonusNum] = 0;
+}
 
 
 unsigned long MatchSequenceStartTime = 0;
@@ -2301,12 +2393,12 @@ int ShowMatchSequence(boolean curStateChanged) {
   if (curStateChanged) {
     MatchSequenceStartTime = CurrentTime;
     MatchDelay = 1500;
-    MatchDigit = random(0, 10);
+//    MatchDigit = random(0, 10);
+    MatchDigit = CurrentTime%10;
     NumMatchSpins = 0;
     BSOS_SetLampState(MATCH, 1, 0);
     BSOS_SetDisableFlippers();
     ScoreMatches = 0;
-//    BSOS_SetLampState(BALL_IN_PLAY, 0);
   }
 
   if (NumMatchSpins < 40) {
@@ -2368,9 +2460,6 @@ int ShowMatchSequence(boolean curStateChanged) {
 
 int RunGamePlayMode(int curState, boolean curStateChanged) {
   int returnState = curState;
-  byte totalBonusAtTop = Bonus[0] + Bonus[1] + Bonus[2];
-  //byte bonusAtTop2 = Bonus2;
-  //byte bonusAtTop3 = Bonus3;
   unsigned long scoreAtTop = CurrentScoreOfCurrentPlayer;
 
   // Very first time into gameplay loop
@@ -2384,6 +2473,7 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
     returnState = CountdownBonus(curStateChanged);
     ShowPlayerScores(0xFF, false, false);
   } else if (curState == MACHINE_STATE_BALL_OVER) {
+    BSOS_SetDisplayCredits(Credits);
     MeteorStatus[CurrentPlayer] = CheckSequentialSwitches(SW_DROP_TARGET_R, 6);
     if (GameMode>=GAME_MODE_ORPHEUS_START) MeteorStatus[CurrentPlayer] = 0;
     CurrentScores[CurrentPlayer] = CurrentScoreOfCurrentPlayer;
@@ -2400,7 +2490,6 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
         CurrentBallInPlay += 1;
       }
       CurrentScoreOfCurrentPlayer = CurrentScores[CurrentPlayer];
-      //CurrentPlayerMeteorStatus = MeteorStatus[CurrentPlayer];
       CurrentBonusX = BonusX[CurrentPlayer];
       scoreAtTop = CurrentScoreOfCurrentPlayer;
       
@@ -2433,10 +2522,10 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
       }
       unsigned long scoreAddition = 0;
         
-      if (OrpheusScoring) {
+      if (AwardScoring) {
         if (switchHit!=SW_SLAM && switchHit!=SW_TILT) {
           PlaySoundEffect(SOUND_EFFECT_WIZARD_SCORING);
-          CurrentScoreOfCurrentPlayer += 25000;
+          CurrentScoreOfCurrentPlayer += 20000;
         }
       }
       
@@ -2548,15 +2637,25 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
               if (count==0 || count==5) scoreAddition += 600;
             }
           }
-          CurrentScoreOfCurrentPlayer += (200 + scoreAddition);
+          if (SuperSpinnerEndTime) {
+            CurrentScoreOfCurrentPlayer += (800 + 4*scoreAddition);
+            GoalsCompletedFlags[CurrentPlayer] |= GOAL_SUPER_SPINNER_ACHIEVED;
+          }
+          else CurrentScoreOfCurrentPlayer += (200 + scoreAddition);
           PlaySoundEffect(SOUND_EFFECT_SPINNER);
           SpinnerHitPhase = (SpinnerHitPhase+1)%12;
           LastTimeSpinnerHit = CurrentTime;
           shiftLamps = true;
           if (GameMode==GAME_MODE_UNSTRUCTURED_PLAY) {
             NumberOfSpins[CurrentPlayer] += 1;
-            if (NumberOfSpins[CurrentPlayer]>99) NumberOfSpins[CurrentPlayer] = 99;
-            BSOS_SetDisplayCredits(99-NumberOfSpins[CurrentPlayer]);
+            if (NumberOfSpins[CurrentPlayer]>99) {
+              NumberOfSpins[CurrentPlayer] = 0;
+              SuperSpinnerEndTime = CurrentTime + SUPER_SPINNER_DURATION;
+              PlaySoundEffect(SOUND_EFFECT_SUPER_SPINNER);
+              BSOS_SetDisplayCredits(Credits);
+            } else {
+              BSOS_SetDisplayCredits(99-NumberOfSpins[CurrentPlayer]);
+            }
           }
           if (BallFirstSwitchHitTime == 0) BallFirstSwitchHitTime = CurrentTime;
           break;
@@ -2608,10 +2707,6 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           }
         break;
         case SW_THUMPER_BUMPER:
-          if (TargetWowPhase) {
-            if (TargetWowPhase==3) TargetWowPhase = 1;
-            else TargetWowPhase += 1;
-          }
           CurrentScoreOfCurrentPlayer += (unsigned long)1000;
           PlaySoundEffect(SOUND_EFFECT_THUMPER_BUMPER_HIT);
           shiftLamps = true;
@@ -2625,10 +2720,12 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           } else {
             if (CollectRocketsByte&ROCKET_3_COLLECT_LIGHT) {
               CollectRocketsByte &= ~ROCKET_3_COLLECT_LIGHT;
-              Bonus[2] += 1;
+              AddToBonus(2);
+/*              Bonus[2] += 1;
               if (Bonus[2]>MAX_DISPLAY_BONUS) Bonus[2] = MAX_DISPLAY_BONUS;
               BonusAnimationStart[2] = CurrentTime;
               BonusAnimationShown[2] = 0;
+*/
             } else {
               PlaySoundEffect(SOUND_EFFECT_ROCKET_3_UNLIT);
             }
@@ -2646,11 +2743,12 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           } else {
             if (CollectRocketsByte&ROCKET_1_COLLECT_LIGHT) {
               CollectRocketsByte &= ~ROCKET_1_COLLECT_LIGHT;
-              //AddToBonus(1, 0, 0);
-              Bonus[0] += 1;
+              AddToBonus(0);
+/*              Bonus[0] += 1;
               if (Bonus[0]>MAX_DISPLAY_BONUS) Bonus[0] = MAX_DISPLAY_BONUS;
               BonusAnimationStart[0] = CurrentTime;
               BonusAnimationShown[0] = 0;
+*/              
             } else {
               PlaySoundEffect(SOUND_EFFECT_ROCKET_1_UNLIT);
             }
@@ -2662,10 +2760,6 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           break;
         case SW_LEFT_SLINGSHOT:
         case SW_RIGHT_SLINGSHOT:
-          if (TargetWowPhase) {
-            if (TargetWowPhase==3) TargetWowPhase = 1;
-            else TargetWowPhase += 1;
-          }
           CurrentScoreOfCurrentPlayer += 10;
           PlaySoundEffect(SOUND_EFFECT_SLING1+(CurrentTime%3));
           shiftLamps = true;
@@ -2720,11 +2814,8 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
   if (shiftLamps) {
     SpotMeteorTargetByte = (SpotMeteorTargetByte>>1)|(SpotMeteorTargetByte<<7);
     CollectRocketsByte = (CollectRocketsByte>>1)|(CollectRocketsByte<<7);
-  }
-
-  byte totalBonus = Bonus[0] + Bonus[1] + Bonus[2];
-  if (totalBonus!=totalBonusAtTop) {
-    ShowBonus(Bonus, BonusAnimationStart);
+    TargetAwardPhase += 1;
+    if (TargetAwardPhase>2) TargetAwardPhase = 0;
   }
 
   if (!ScrollingScores && CurrentScoreOfCurrentPlayer > BALLY_STERN_OS_MAX_DISPLAY_SCORE) {
@@ -2754,9 +2845,8 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
 
 void loop() {
 
-//#if not defined (BALLY_STERN_OS_SOFTWARE_DISPLAY_INTERRUPT)    
   BSOS_DataRead(0);
-//#endif  
+
   CurrentTime = millis();
   int newMachineState = MachineState;
 
