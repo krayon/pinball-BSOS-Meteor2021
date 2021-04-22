@@ -273,7 +273,6 @@ byte ScoreAwardReplay = 0;
 boolean HighScoreReplay = true;
 boolean MatchFeature = true;
 boolean TournamentScoring = false;
-boolean ResetScoresToClearVersion = false;
 boolean ScrollingScores = true;
 
 
@@ -429,11 +428,9 @@ void setup() {
   BSOS_SetCoinLockout((Credits >= MaximumCredits) ? true : false);
 
   CurrentScores[0] = METEOR2021_MAJOR_VERSION;
-//  CurrentScoreOfCurrentPlayer = METEOR2021_MAJOR_VERSION;
   CurrentScores[1] = METEOR2021_MINOR_VERSION;
   CurrentScores[2] = BALLY_STERN_OS_MAJOR_VERSION;
   CurrentScores[3] = BALLY_STERN_OS_MINOR_VERSION;
-  ResetScoresToClearVersion = true;
 
 #if defined(USE_WAV_TRIGGER) || defined(USE_WAV_TRIGGER_1p3)
   // WAV Trigger startup at 57600
@@ -441,7 +438,7 @@ void setup() {
   wTrig.stopAllTracks();
 //  wTrig.masterGain(0);
 //  wTrig.setAmpPwr(false);
-  delay(10);
+  delayMicroseconds(10000);
 
   // Send a stop-all command and reset the sample-rate offset, in case we have
   //  reset while the WAV Trigger was already playing.
@@ -1631,26 +1628,28 @@ boolean HandleSpotMeteorSwitch(byte switchHit, boolean overrideSpot=false) {
   if ((SpotMeteorTargetByte & lampMask) || overrideSpot) {
     byte meteorTarget = 0;
     byte currentSwitches = CheckSequentialSwitches(SW_DROP_TARGET_R, 6);
-    if (SpotMeteorReverse) {
-      for (int count=0; count<6; count++) {
-        if (!(currentSwitches & (1<<count))) {
-          meteorTarget = count;
-          break;
+    if (currentSwitches<0x3F) {
+      if (SpotMeteorReverse) {
+        for (int count=0; count<6; count++) {
+          if (!(currentSwitches & (1<<count))) {
+            meteorTarget = count;
+            break;
+          }
+        }
+      } else {
+        for (int count=5; count>=0; count--) {
+          if (!(currentSwitches & (1<<count))) {
+            meteorTarget = count;
+            break;
+          }
         }
       }
-    } else {
-      for (int count=5; count>=0; count--) {
-        if (!(currentSwitches & (1<<count))) {
-          meteorTarget = count;
-          break;
-        }
-      }
+      SpotMeteorReverse = !SpotMeteorReverse;
+      BSOS_PushToSolenoidStack(MeteorSolenoid[meteorTarget], 6);
+      SpotMeteorTargetByte &= ~(lampMask);
+  
+      return true;
     }
-    SpotMeteorReverse = !SpotMeteorReverse;
-    BSOS_PushToSolenoidStack(MeteorSolenoid[meteorTarget], 6);
-    SpotMeteorTargetByte &= ~(lampMask);
-
-    return true;
   }
 
   return false;
@@ -1686,7 +1685,7 @@ void HandleMeteorDropTargetHit(byte switchHit) {
 
     byte currentSwitches = CheckSequentialSwitches(SW_DROP_TARGET_R, 6);
     
-    if (GameMode!=GAME_MODE_ORPHEUS && GameMode!=GAME_MODE_ORPHEUS_FRAGMENTED && GameMode!=GAME_MODE_ORPHEUS_START) {
+    if (GameMode<GAME_MODE_ORPHEUS_START) {
       if (currentSwitches==0x3F) {
         BSOS_PushToTimedSolenoidStack(SOL_RESET_METEOR_BANK, 15, CurrentTime+500);
         if (AwardScoring==AWARD_SCORING_WIZARD) {
@@ -1802,9 +1801,6 @@ int InitGamePlay() {
   BSOS_SetCoinLockout((Credits >= MaximumCredits) ? true : false);
   BSOS_TurnOffAllLamps();
   StopAudio();
-
-  // When we go back to attract mode, there will be no need to reset scores
-  ResetScoresToClearVersion = false;
 
   // Reset displays & game state variables
   for (int count = 0; count < 4; count++) {
@@ -2188,10 +2184,8 @@ int ManageGameMode() {
       if (CurrentTime>GameModeEndTime) {
         GameModeStartTime = 0;
         GameMode = GAME_MODE_UNSTRUCTURED_PLAY;
-//        StopAudio();
         SetMeteorDropTargets(0);
-        //PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
-        //ResumeBackgroundSong();
+        PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
         OrpheusRound[CurrentPlayer] += 1;
         AwardScoring = 0;
       }
@@ -2202,7 +2196,7 @@ int ManageGameMode() {
         BSOS_TurnOffAllLamps();
         StopAudio();
         PlayBackgroundSong(SOUND_EFFECT_WIZARD_MODE);
-        SetMeteorDropTargets(0x00, 0, false);
+        SetMeteorDropTargets(0x00, 0);
         GameModeStartTime = CurrentTime;
         AwardScoring = AWARD_SCORING_WIZARD;
         GoalsCompletedFlags[CurrentPlayer] |= GOAL_WIZARD_MODE_COLLECTED;
@@ -2214,10 +2208,8 @@ int ManageGameMode() {
       if (CurrentTime>GameModeEndTime) {
         GameModeStartTime = 0;
         GameMode = GAME_MODE_UNSTRUCTURED_PLAY;
-//        ResumeBackgroundSong();
-//        StopAudio();
         SetMeteorDropTargets(0);
-//        PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
+        PlayBackgroundSongBasedOnBall(CurrentBallInPlay);
         AwardScoring = 0;
       }
     break;
@@ -2763,7 +2755,7 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
           CurrentScoreOfCurrentPlayer += 10;
           PlaySoundEffect(SOUND_EFFECT_SLING1+(CurrentTime%3));
           shiftLamps = true;
-          if (currentSwitches==0x3F) SetMeteorDropTargets(0, 450);
+          if (currentSwitches==0x3F && GameMode<GAME_MODE_ORPHEUS_START) SetMeteorDropTargets(0, 450);
           if (BallFirstSwitchHitTime == 0) BallFirstSwitchHitTime = CurrentTime;
           break;
         case SW_COIN_1:
