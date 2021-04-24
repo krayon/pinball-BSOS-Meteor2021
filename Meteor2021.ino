@@ -40,7 +40,7 @@ SendOnlyWavTrigger wTrig;             // Our WAV Trigger object
 #endif
 
 #define METEOR2021_MAJOR_VERSION  2021
-#define METEOR2021_MINOR_VERSION  1
+#define METEOR2021_MINOR_VERSION  2
 #define DEBUG_MESSAGES  0
 
 
