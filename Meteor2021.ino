@@ -18,11 +18,7 @@
     See <https://www.gnu.org/licenses/>.
 */
 
-// Ideas
-// 1) clutch shot
-// 2) special shot on rockets aligned
-// 3) spinner = 0 reward
-// 4) spinner reward stacked with orpheus
+#define COINS_PER_CREDIT    1
 
 #include "BSOS_Config.h"
 #include "BallySternOS.h"
@@ -40,7 +36,7 @@ SendOnlyWavTrigger wTrig;             // Our WAV Trigger object
 #endif
 
 #define METEOR2021_MAJOR_VERSION  2021
-#define METEOR2021_MINOR_VERSION  2
+#define METEOR2021_MINOR_VERSION  1
 #define DEBUG_MESSAGES  0
 
 
@@ -1127,8 +1123,19 @@ void AddCoinToAudit(byte switchHit) {
 
 }
 
+byte CoinsAdded = 0;
 
-void AddCredit(boolean playSound = false, byte numToAdd = 1) {
+void AddCredit(boolean playSound = false, byte numToAdd = 1, boolean coinCredit = false) {
+
+  if (coinCredit) {
+    CoinsAdded += 1;
+    if (CoinsAdded<COINS_PER_CREDIT) {
+      if (playSound) PlaySoundEffect(SOUND_EFFECT_ADD_CREDIT);
+      return;
+    }
+    CoinsAdded = 0;
+  }
+  
   if (Credits < MaximumCredits) {
     Credits += numToAdd;
     if (Credits > MaximumCredits) Credits = MaximumCredits;
@@ -1143,8 +1150,10 @@ void AddCredit(boolean playSound = false, byte numToAdd = 1) {
 
 }
 
+
+
 void AddSpecialCredit() {
-  AddCredit(false, 1);
+  AddCredit(false, 1, false);
   BSOS_PushToTimedSolenoidStack(SOL_KNOCKER, 3, CurrentTime, true);
   BSOS_WriteULToEEProm(BSOS_TOTAL_REPLAYS_EEPROM_START_BYTE, BSOS_ReadULFromEEProm(BSOS_TOTAL_REPLAYS_EEPROM_START_BYTE) + 1);  
 }
@@ -1561,7 +1570,7 @@ int RunAttractMode(int curState, boolean curStateChanged) {
     }
     if (switchHit == SW_COIN_1 || switchHit == SW_COIN_2 || switchHit == SW_COIN_3) {
       AddCoinToAudit(switchHit);
-      AddCredit(true, 1);
+      AddCredit(true, 1, true);
     }
     if (switchHit == SW_SELF_TEST_SWITCH && (CurrentTime - GetLastSelfTestChangedTime()) > 250) {
       returnState = MACHINE_STATE_TEST_LIGHTS;
@@ -2344,7 +2353,7 @@ void CheckHighScores() {
   if (highestScore > HighScore) {
     HighScore = highestScore;
     if (HighScoreReplay) {
-      AddCredit(false, 3);
+      AddCredit(false, 3, false);
       BSOS_WriteULToEEProm(BSOS_TOTAL_REPLAYS_EEPROM_START_BYTE, BSOS_ReadULFromEEProm(BSOS_TOTAL_REPLAYS_EEPROM_START_BYTE) + 3);
     }
     BSOS_WriteULToEEProm(BSOS_HIGHSCORE_EEPROM_START_BYTE, highestScore);
@@ -2762,7 +2771,7 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
         case SW_COIN_2:
         case SW_COIN_3:
           AddCoinToAudit(switchHit);
-          AddCredit(true, 1);
+          AddCredit(true, 1, true);
           break;
         case SW_CREDIT_RESET:
           if (CurrentBallInPlay < 2) {
@@ -2797,7 +2806,7 @@ int RunGamePlayMode(int curState, boolean curStateChanged) {
         case SW_COIN_2:
         case SW_COIN_3:
           AddCoinToAudit(switchHit);
-          AddCredit(true, 1);
+          AddCredit(true, 1, true);
           break;
       }
     }
